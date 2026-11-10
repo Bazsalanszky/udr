@@ -6,11 +6,11 @@
 package context
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/omec-project/openapi/v2/models"
+	"github.com/omec-project/util/sbiaddr"
 )
 
 var udrContext = UDRContext{}
@@ -35,10 +35,11 @@ func init() {
 type UDRContext struct {
 	Name                                    string
 	UriScheme                               models.UriScheme
-	BindingIPv4                             string
+	BindingIPv4                             string // SBI listen host; despite the name, any family
 	Key                                     string
 	PEM                                     string
-	RegisterIPv4                            string // IP register to NRF
+	RegisterIPv4                            string // IPv4 address or host name registered to the NRF
+	RegisterIPv6                            string // IPv6 address registered to the NRF
 	HttpIPv6Address                         string
 	NfId                                    string
 	NrfUri                                  string
@@ -48,6 +49,7 @@ type UDRContext struct {
 	UEGroupCollection                       sync.Map // map[ueGroupId]*UEGroupSubsData
 	mtx                                     sync.RWMutex
 	SBIPort                                 int
+	SbiPreference                           sbiaddr.Preference
 	EeSubscriptionIDGenerator               atomic.Int64
 	SdmSubscriptionIDGenerator              atomic.Int64
 	PolicyDataSubscriptionIDGenerator       int
@@ -93,7 +95,24 @@ func (context *UDRContext) GetIPv4GroupUri(udrServiceType UDRServiceType) string
 		serviceUri = ""
 	}
 
-	return fmt.Sprintf("%s://%s:%d%s", context.UriScheme, context.RegisterIPv4, context.SBIPort, serviceUri)
+	return context.GetSbiUri() + serviceUri
+}
+
+// SbiAddrs classifies the configured register hosts (RegisterIPv4 and
+// RegisterIPv6) into an FQDN, an IPv4 and an IPv6 address.
+func (context *UDRContext) SbiAddrs() sbiaddr.RegisterAddrs {
+	addrs, err := sbiaddr.ParseRegister(context.RegisterIPv4, context.RegisterIPv6)
+	// The result is usable even when err is set: err only lists the values that
+	// were dropped, and InitUdrContext has already logged them.
+	_ = err
+	return addrs
+}
+
+// GetSbiUri is the UDR's own base URI, scheme://host:port, with an IPv6 host
+// in brackets. For an IPv4 address or a host name it is the same as the
+// former "%s://%s:%d" formatting.
+func (context *UDRContext) GetSbiUri() string {
+	return context.SbiAddrs().URI(string(context.UriScheme), context.SBIPort, context.SbiPreference)
 }
 
 // Create new UDR context

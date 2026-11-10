@@ -8,13 +8,13 @@ package consumer
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/omec-project/openapi/v2"
 	"github.com/omec-project/openapi/v2/Nnrf_NFManagement"
 	"github.com/omec-project/openapi/v2/models"
+	openapiutils "github.com/omec-project/openapi/v2/utils"
 	udrContext "github.com/omec-project/udr/context"
 	"github.com/omec-project/udr/factory"
 	"github.com/omec-project/udr/logger"
@@ -46,15 +46,21 @@ func getNfProfile(udrContext *udrContext.UDRContext, plmnConfig []models.PlmnId)
 	version := factory.UdrConfig.Info.Version
 	tmpVersion := strings.Split(version, ".")
 	versionUri := "v" + tmpVersion[0]
-	apiPrefix := fmt.Sprintf("%s://%s:%d", udrContext.UriScheme, udrContext.RegisterIPv4, udrContext.SBIPort)
-	ipEndPoint := models.NewIpEndPoint()
-	ipEndPoint.SetIpv4Address(udrContext.RegisterIPv4)
-	ipEndPoint.SetTransport(models.TRANSPORTPROTOCOL_TCP)
-	ipEndPoint.SetPort(int32(udrContext.SBIPort))
+	// RegisterIPv4 may hold a host name, so it must not go into an IPv4 field:
+	// a host name goes into fqdn, and each address into the field of its family.
+	addrs := udrContext.SbiAddrs()
+	if addrs.Empty() {
+		return profile, openapi.ReportError("UDR address is empty. NF profile cannot be built")
+	}
+	openapiutils.SetNFProfileAddresses(&profile, addrs.FQDN, addrs.IPv4, addrs.IPv6)
 	nfServiceVersion := models.NewNFServiceVersion(versionUri, version)
 	nfService := models.NewNFService("datarepository", models.SERVICENAME_NUDR_DR, []models.NFServiceVersion{*nfServiceVersion}, udrContext.UriScheme, models.NFSERVICESTATUS_REGISTERED)
-	nfService.SetApiPrefix(apiPrefix)
-	nfService.SetIpEndPoints([]models.IpEndPoint{*ipEndPoint})
+	nfService.SetApiPrefix(udrContext.GetSbiUri())
+	// One endpoint per family (TS 29.510 allows only one address per IpEndPoint), IPv4 first.
+	nfService.SetIpEndPoints(openapiutils.NewIpEndPoints(addrs.IPv4, addrs.IPv6, int32(udrContext.SBIPort)))
+	if addrs.FQDN != "" {
+		nfService.SetFqdn(addrs.FQDN)
+	}
 	profile.SetNfServices([]models.NFService{*nfService})
 	profile.SetNfServiceList(map[string]models.NFService{
 		nfService.GetServiceInstanceId(): *nfService,
